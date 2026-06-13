@@ -12,9 +12,9 @@
 // ---------- LCD ----------
 hd44780_I2Cexp lcd;
 
-// ---------- DHT22 ----------
+// ---------- DHT11 ----------
 #define DHTPIN 15
-#define DHTTYPE DHT22
+#define DHTTYPE DHT11
 DHT dht(DHTPIN, DHTTYPE);
 
 // ---------- Config ----------
@@ -153,7 +153,7 @@ void paginaConfiguracio() {
   html += "<meta charset='UTF-8'>";
   html += "<title>Configuracio ESP32</title>";
   html += "</head><body>";
-  html += "<h2>Configuracio ESP32 DHT22</h2>";
+  html += "<h2>Configuracio ESP32 DHT11</h2>";
 
   html += "<form method='POST' action='/save'>";
 
@@ -243,7 +243,7 @@ void mostrarDHT() {
 
   if (isnan(temperatura) || isnan(humitat)) {
     lcd.setCursor(0, 0);
-    lcd.print("Error DHT22");
+    lcd.print("Error DHT11");
   } else {
     lcd.setCursor(0, 0);
     lcd.print("Temp: ");
