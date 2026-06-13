@@ -5,7 +5,7 @@ Firmware for an ESP32-based IoT environmental data logger.
 ## Features
 
 - ESP32 WROOM32 support
-- DHT22 temperature and humidity sensor
+- DHT11 temperature and humidity sensor
 - 16x2 LCD display over I2C
 - WiFi configuration portal
 - Persistent configuration using ESP32 Preferences
@@ -14,14 +14,14 @@ Firmware for an ESP32-based IoT environmental data logger.
 ## Hardware
 
 - AZDelivery ESP32 WROOM32
-- DHT22 sensor module
+- DHT11 sensor module
 - 16x2 LCD I2C display
 
 ## Current pinout
 
 | Component | ESP32 pin |
 |---|---|
-| DHT22 DATA | GPIO15 |
+| DHT11 DATA | GPIO15 |
 | LCD SDA | GPIO21 |
 | LCD SCL | GPIO22 |
 
