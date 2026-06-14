@@ -68,3 +68,8 @@ If LCD corruption, random characters or ESP32 resets reappear:
 2. Verify SDA and SCL connections.
 3. Consider using an I2C level shifter if the LCD backpack uses pull-ups to 5V.
 4. Test with LCD disconnected to isolate hardware issues.
+
+### Known issue
+
+Avoid reintroducing frequent LCD refreshes (for example every few seconds).
+During testing, aggressive LCD updates were associated with display corruption and system instability.
