@@ -25,31 +25,48 @@ String ssid;
 String password;
 String thingSpeakApiKey;
 
-unsigned long intervalDHT = 60000;
-unsigned long intervalThingSpeak = 60000;
-unsigned long intervalIP = 15000;
-
-unsigned long tempsAnteriorDHT = 0;
-unsigned long tempsAnteriorThingSpeak = 0;
-unsigned long tempsAnteriorIP = 0;
+unsigned long intervalDHT = 300000;        // 300 s
+unsigned long intervalThingSpeak = 300000; // 300 s
 
 float temperatura = NAN;
 float humitat = NAN;
 
 const char* thingSpeakServer = "http://api.thingspeak.com/update";
 
+// ---------- Control pantalla ----------
+const unsigned long tempsPantallaEncesa = 5000; // 5 segons
+bool pantallaEncesa = false;
+unsigned long momentEncesaPantalla = 0;
+
+// ---------- Temps ----------
+unsigned long tempsAnteriorDHT = 0;
+unsigned long tempsAnteriorThingSpeak = 0;
+
 // ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
+  delay(1000);
+
+  Serial.println();
+  Serial.println("Inici ESP32-IoT-Logger");
+  Serial.print("Reset reason: ");
+  Serial.println(esp_reset_reason());
 
   Wire.begin(21, 22);
 
   int status = lcd.begin(16, 2);
+  Serial.print("LCD status: ");
+  Serial.println(status);
+
   if (status) {
-    while (true);
+    Serial.println("Error inicialitzant LCD");
+    while (true) {
+      delay(1000);
+    }
   }
 
-  lcd.backlight();
+  lcd.noBacklight();
+
   dht.begin();
 
   carregarConfiguracio();
@@ -64,35 +81,33 @@ void setup() {
     iniciarModeConfiguracio();
   }
 
+  // Primera lectura, sense enviar a ThingSpeak encara
   llegirDHT();
   mostrarDHT();
-  enviarThingSpeak();
 
   tempsAnteriorDHT = millis();
   tempsAnteriorThingSpeak = millis();
-  tempsAnteriorIP = millis();
+
+  Serial.println("Setup acabat");
 }
 
 // ---------- Loop ----------
 void loop() {
   unsigned long ara = millis();
 
-  if (ara - tempsAnteriorIP >= intervalIP) {
-    tempsAnteriorIP = ara;
-    mostrarIP();
-    delay(3000);
-    mostrarDHT();
-  }
+  gestionarApagatPantalla();
 
   if (ara - tempsAnteriorDHT >= intervalDHT) {
     tempsAnteriorDHT = ara;
-    llegirDHT();
-    mostrarDHT();
-  }
 
-  if (ara - tempsAnteriorThingSpeak >= intervalThingSpeak) {
-    tempsAnteriorThingSpeak = ara;
-    enviarThingSpeak();
+    llegirDHT();
+
+    if (ara - tempsAnteriorThingSpeak >= intervalThingSpeak) {
+      tempsAnteriorThingSpeak = ara;
+      enviarThingSpeak();
+    }
+
+    mostrarDHT();
   }
 }
 
@@ -104,10 +119,19 @@ void carregarConfiguracio() {
   password = prefs.getString("pass", "");
   thingSpeakApiKey = prefs.getString("api", "");
 
-  intervalDHT = prefs.getULong("intDHT", 60000);
-  intervalThingSpeak = prefs.getULong("intTS", 60000);
+  intervalDHT = prefs.getULong("intDHT", 300000);
+  intervalThingSpeak = prefs.getULong("intTS", 300000);
 
   prefs.end();
+
+  Serial.print("SSID guardada: ");
+  Serial.println(ssid);
+
+  Serial.print("Interval DHT ms: ");
+  Serial.println(intervalDHT);
+
+  Serial.print("Interval ThingSpeak ms: ");
+  Serial.println(intervalThingSpeak);
 }
 
 void guardarConfiguracio() {
@@ -117,24 +141,31 @@ void guardarConfiguracio() {
   prefs.putString("pass", server.arg("password"));
   prefs.putString("api", server.arg("api"));
 
-  prefs.putULong("intDHT", server.arg("intDHT").toInt() * 1000UL);
-  prefs.putULong("intTS", server.arg("intTS").toInt() * 1000UL);
+  unsigned long nouIntervalDHT = server.arg("intDHT").toInt() * 1000UL;
+  unsigned long nouIntervalTS = server.arg("intTS").toInt() * 1000UL;
+
+  if (nouIntervalDHT < 5UL * 1000UL) nouIntervalDHT = 5UL * 1000UL;
+  if (nouIntervalTS < 15UL * 1000UL) nouIntervalTS = 15UL * 1000UL;
+
+  prefs.putULong("intDHT", nouIntervalDHT);
+  prefs.putULong("intTS", nouIntervalTS);
 
   prefs.end();
 }
 
 // ---------- Mode configuració ----------
 void iniciarModeConfiguracio() {
+  Serial.println("Mode configuracio");
+
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("ESP32_DHT_Config", "12345678");
+  WiFi.softAP("ESP32_IoT_Config", "configesp32");
 
   IPAddress ip = WiFi.softAPIP();
 
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Mode config");
-  lcd.setCursor(0, 1);
-  lcd.print(ip);
+  mostrarMissatgeLCD("Mode config", "192.168.4.1");
+
+  Serial.print("AP config IP: ");
+  Serial.println(ip);
 
   server.on("/", paginaConfiguracio);
   server.on("/save", HTTP_POST, desarConfiguracio);
@@ -142,6 +173,7 @@ void iniciarModeConfiguracio() {
 
   while (true) {
     server.handleClient();
+    gestionarApagatPantalla();
     delay(10);
   }
 }
@@ -167,15 +199,15 @@ void paginaConfiguracio() {
   html += "<input name='api' value='" + thingSpeakApiKey + "'><br><br>";
 
   html += "Interval lectura DHT, en segons:<br>";
-  html += "<input name='intDHT' type='number' value='60'><br><br>";
+  html += "<input name='intDHT' type='number' value='" + String(intervalDHT / 1000UL) + "'><br><br>";
 
   html += "Interval enviament ThingSpeak, en segons:<br>";
-  html += "<input name='intTS' type='number' value='60'><br><br>";
+  html += "<input name='intTS' type='number' value='" + String(intervalThingSpeak / 1000UL) + "'><br><br>";
 
   html += "<button type='submit'>Desar i reiniciar</button>";
   html += "</form>";
 
-  html += "<p>Connecta't a la WiFi <b>ESP32_DHT_Config</b> i obre <b>192.168.4.1</b></p>";
+  html += "<p>Connecta't a la WiFi <b>ESP32_IoT_Config</b> i obre <b>192.168.4.1</b></p>";
 
   html += "</body></html>";
 
@@ -194,9 +226,9 @@ void desarConfiguracio() {
 
 // ---------- WiFi normal ----------
 void connectarWiFi() {
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Connectant WiFi");
+  Serial.print("Connectant WiFi");
+
+  mostrarMissatgeLCD("Connectant WiFi", "");
 
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid.c_str(), password.c_str());
@@ -207,29 +239,42 @@ void connectarWiFi() {
   while (WiFi.status() != WL_CONNECTED && millis() - inici < timeout) {
     delay(500);
     Serial.print(".");
+    gestionarApagatPantalla();
   }
 
-  lcd.clear();
+  Serial.println();
 
   if (WiFi.status() == WL_CONNECTED) {
-    lcd.setCursor(0, 0);
-    lcd.print("WiFi OK");
-    lcd.setCursor(0, 1);
-    lcd.print(WiFi.localIP());
+    Serial.print("WiFi OK. IP: ");
+    Serial.println(WiFi.localIP());
+
+    mostrarMissatgeLCD("WiFi OK", "");
+
     delay(3000);
+    gestionarApagatPantalla();
+
   } else {
-    lcd.setCursor(0, 0);
-    lcd.print("Error WiFi");
-    lcd.setCursor(0, 1);
-    lcd.print("Mode config");
+    Serial.println("Error WiFi");
+
+    mostrarMissatgeLCD("Error WiFi", "Mode config");
+
     delay(3000);
+    gestionarApagatPantalla();
   }
 }
 
 // ---------- DHT ----------
 void llegirDHT() {
-  temperatura = dht.readTemperature();
-  humitat = dht.readHumidity();
+  float novaTemperatura = dht.readTemperature();
+  float novaHumitat = dht.readHumidity();
+
+  if (isnan(novaTemperatura) || isnan(novaHumitat)) {
+    Serial.println("Lectura DHT invalida. Es conserva l'ultim valor bo.");
+    return;
+  }
+
+  temperatura = novaTemperatura;
+  humitat = novaHumitat;
 
   Serial.print("Temperatura: ");
   Serial.print(temperatura);
@@ -239,49 +284,86 @@ void llegirDHT() {
 }
 
 void mostrarDHT() {
-  lcd.clear();
-
   if (isnan(temperatura) || isnan(humitat)) {
-    lcd.setCursor(0, 0);
-    lcd.print("Error DHT11");
-  } else {
-    lcd.setCursor(0, 0);
-    lcd.print("Temp: ");
-    lcd.print(temperatura, 1);
-    lcd.print((char)223);
-    lcd.print("C");
-
-    lcd.setCursor(0, 1);
-    lcd.print("Hum: ");
-    lcd.print(humitat, 1);
-    lcd.print("%");
+    mostrarMissatgeLCD("Error DHT11", "");
+    return;
   }
+
+  String linia1 = "Temp: " + String(temperatura, 1) + " C";
+  String linia2 = "Hum:  " + String(humitat, 1) + " %";
+
+  Serial.print("LCD linia 1: ");
+  Serial.println(linia1);
+  Serial.print("LCD linia 2: ");
+  Serial.println(linia2);
+
+  mostrarMissatgeLCD(linia1, linia2);
 }
 
-// ---------- IP ----------
-void mostrarIP() {
-  lcd.clear();
+// ---------- LCD ----------
+void mostrarMissatgeLCD(String linia1, String linia2) {
+  linia1 = ajustarLiniaLCD(linia1);
+  linia2 = ajustarLiniaLCD(linia2);
 
-  if (WiFi.status() == WL_CONNECTED) {
-    lcd.setCursor(0, 0);
-    lcd.print("IP WiFi:");
-    lcd.setCursor(0, 1);
-    lcd.print(WiFi.localIP());
-  } else {
-    lcd.setCursor(0, 0);
-    lcd.print("WiFi perduda");
-    lcd.setCursor(0, 1);
-    lcd.print("Reiniciant...");
-    delay(2000);
-    ESP.restart();
+  lcd.backlight();
+  pantallaEncesa = true;
+  momentEncesaPantalla = millis();
+
+  delay(20);
+
+  lcd.home();
+  delay(10);
+  lcd.clear();
+  delay(10);
+
+  lcd.setCursor(0, 0);
+  lcd.print(linia1);
+
+  delay(20);
+
+  lcd.setCursor(0, 1);
+  lcd.print(linia2);
+
+  delay(20);
+}
+
+String ajustarLiniaLCD(String text) {
+  if (text.length() > 16) {
+    text = text.substring(0, 16);
+  }
+
+  while (text.length() < 16) {
+    text += " ";
+  }
+
+  return text;
+}
+
+void gestionarApagatPantalla() {
+  if (pantallaEncesa && millis() - momentEncesaPantalla >= tempsPantallaEncesa) {
+    lcd.noBacklight();
+    pantallaEncesa = false;
   }
 }
 
 // ---------- ThingSpeak ----------
 void enviarThingSpeak() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  if (isnan(temperatura) || isnan(humitat)) return;
-  if (thingSpeakApiKey == "") return;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("No s'envia: WiFi no connectada");
+    return;
+  }
+
+  if (isnan(temperatura) || isnan(humitat)) {
+    Serial.println("No s'envia: dades DHT invalides");
+    return;
+  }
+
+  if (thingSpeakApiKey == "") {
+    Serial.println("No s'envia: API Key buida");
+    return;
+  }
+
+  Serial.println("Enviant a ThingSpeak...");
 
   HTTPClient http;
 
