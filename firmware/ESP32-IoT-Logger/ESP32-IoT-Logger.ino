@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#include "esp_wpa2.h"
 #include <WebServer.h>
 #include <Preferences.h>
 #include <HTTPClient.h>
@@ -21,12 +22,16 @@ DHT dht(DHTPIN, DHTTYPE);
 Preferences prefs;
 WebServer server(80);
 
+String wifiType = "personal";  // "personal" o "enterprise"
 String ssid;
 String password;
+String enterpriseUsername;
 String thingSpeakApiKey;
 
 unsigned long intervalDHT = 300000;        // 300 s
 unsigned long intervalThingSpeak = 300000; // 300 s
+
+const unsigned long tempsPortalConfigArrencada = 60000; // 60 segons
 
 float temperatura = NAN;
 float humitat = NAN;
@@ -72,13 +77,15 @@ void setup() {
   carregarConfiguracio();
 
   if (ssid == "") {
-    iniciarModeConfiguracio();
+    iniciarModeConfiguracioPermanent();
   }
+
+  obrirPortalConfiguracioTemporal();
 
   connectarWiFi();
 
   if (WiFi.status() != WL_CONNECTED) {
-    iniciarModeConfiguracio();
+    iniciarModeConfiguracioPermanent();
   }
 
   // Primera lectura, sense enviar a ThingSpeak encara
@@ -115,8 +122,10 @@ void loop() {
 void carregarConfiguracio() {
   prefs.begin("config", true);
 
+  wifiType = prefs.getString("wifiType", "personal");
   ssid = prefs.getString("ssid", "");
   password = prefs.getString("pass", "");
+  enterpriseUsername = prefs.getString("entUser", "");
   thingSpeakApiKey = prefs.getString("api", "");
 
   intervalDHT = prefs.getULong("intDHT", 300000);
@@ -124,8 +133,20 @@ void carregarConfiguracio() {
 
   prefs.end();
 
+  if (wifiType != "enterprise") {
+    wifiType = "personal";
+  }
+
+  Serial.print("Tipus WiFi: ");
+  Serial.println(wifiType);
+
   Serial.print("SSID guardada: ");
   Serial.println(ssid);
+
+  if (wifiType == "enterprise") {
+    Serial.print("Usuari Enterprise: ");
+    Serial.println(enterpriseUsername);
+  }
 
   Serial.print("Interval DHT ms: ");
   Serial.println(intervalDHT);
@@ -137,8 +158,16 @@ void carregarConfiguracio() {
 void guardarConfiguracio() {
   prefs.begin("config", false);
 
+  String nouWifiType = server.arg("wifiType");
+
+  if (nouWifiType != "enterprise") {
+    nouWifiType = "personal";
+  }
+
+  prefs.putString("wifiType", nouWifiType);
   prefs.putString("ssid", server.arg("ssid"));
   prefs.putString("pass", server.arg("password"));
+  prefs.putString("entUser", server.arg("enterpriseUsername"));
   prefs.putString("api", server.arg("api"));
 
   unsigned long nouIntervalDHT = server.arg("intDHT").toInt() * 1000UL;
@@ -154,9 +183,44 @@ void guardarConfiguracio() {
 }
 
 // ---------- Mode configuració ----------
-void iniciarModeConfiguracio() {
-  Serial.println("Mode configuracio");
+void iniciarModeConfiguracioPermanent() {
+  Serial.println("Mode configuracio permanent");
 
+  iniciarAccessPointConfiguracio();
+
+  Serial.println("Portal configuracio permanent actiu");
+
+  while (true) {
+    server.handleClient();
+    gestionarApagatPantalla();
+    delay(10);
+  }
+}
+
+void obrirPortalConfiguracioTemporal() {
+  Serial.println("Portal configuracio temporal durant 60 segons");
+
+  iniciarAccessPointConfiguracio();
+
+  Serial.println("Pots entrar al portal durant 60 segons.");
+  Serial.println("Si no es desa cap canvi, el dispositiu continuara amb la WiFi configurada.");
+
+  unsigned long iniciPortal = millis();
+
+  while (millis() - iniciPortal < tempsPortalConfigArrencada) {
+    server.handleClient();
+    gestionarApagatPantalla();
+    delay(10);
+  }
+
+  server.stop();
+  WiFi.softAPdisconnect(true);
+  delay(500);
+
+  Serial.println("Fi del portal temporal. Continuant arrencada normal.");
+}
+
+void iniciarAccessPointConfiguracio() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP("ESP32_IoT_Config", "configesp32");
 
@@ -170,12 +234,6 @@ void iniciarModeConfiguracio() {
   server.on("/", paginaConfiguracio);
   server.on("/save", HTTP_POST, desarConfiguracio);
   server.begin();
-
-  while (true) {
-    server.handleClient();
-    gestionarApagatPantalla();
-    delay(10);
-  }
 }
 
 void paginaConfiguracio() {
@@ -189,11 +247,29 @@ void paginaConfiguracio() {
 
   html += "<form method='POST' action='/save'>";
 
+  html += "Tipus de WiFi:<br>";
+  html += "<select name='wifiType'>";
+
+  html += "<option value='personal'";
+  if (wifiType == "personal") html += " selected";
+  html += ">Personal / domestica</option>";
+
+  html += "<option value='enterprise'";
+  if (wifiType == "enterprise") html += " selected";
+  html += ">Enterprise WPA2-PEAP</option>";
+
+  html += "</select><br><br>";
+
   html += "SSID WiFi:<br>";
   html += "<input name='ssid' value='" + ssid + "'><br><br>";
 
   html += "Contrasenya WiFi:<br>";
-  html += "<input name='password' type='password' value='" + password + "'><br><br>";
+  html += "<input name='password' type='password' value='" + password + "'><br>";
+  html += "<small>En WiFi personal és la contrasenya de la xarxa. En Enterprise és la contrasenya de l'usuari.</small><br><br>";
+
+  html += "Usuari WiFi Enterprise:<br>";
+  html += "<input name='enterpriseUsername' value='" + enterpriseUsername + "'><br>";
+  html += "<small>Només necessari si el tipus de WiFi és Enterprise.</small><br><br>";
 
   html += "ThingSpeak Write API Key:<br>";
   html += "<input name='api' value='" + thingSpeakApiKey + "'><br><br>";
@@ -208,6 +284,7 @@ void paginaConfiguracio() {
   html += "</form>";
 
   html += "<p>Connecta't a la WiFi <b>ESP32_IoT_Config</b> i obre <b>192.168.4.1</b></p>";
+  html += "<p>Si aquest portal s'ha obert temporalment a l'arrencada, es tancara automaticament al cap de 60 segons si no es desen canvis.</p>";
 
   html += "</body></html>";
 
@@ -224,17 +301,60 @@ void desarConfiguracio() {
   ESP.restart();
 }
 
-// ---------- WiFi normal ----------
+// ---------- WiFi ----------
 void connectarWiFi() {
-  Serial.print("Connectant WiFi");
+  if (wifiType == "enterprise") {
+    connectarWiFiEnterprise();
+  } else {
+    connectarWiFiPersonal();
+  }
+}
 
-  mostrarMissatgeLCD("Connectant WiFi", "");
+void connectarWiFiPersonal() {
+  Serial.print("Connectant WiFi personal");
+
+  mostrarMissatgeLCD("WiFi personal", "Connectant...");
 
   WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);
+  delay(1000);
+
   WiFi.begin(ssid.c_str(), password.c_str());
 
+  esperarConnexioWiFi();
+}
+
+void connectarWiFiEnterprise() {
+  Serial.print("Connectant WiFi Enterprise");
+
+  mostrarMissatgeLCD("WiFi Enterprise", "Connectant...");
+
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);
+  delay(1000);
+
+  if (enterpriseUsername == "" || password == "") {
+    Serial.println();
+    Serial.println("Error: falten usuari o contrasenya Enterprise");
+    mostrarMissatgeLCD("Error Enterprise", "Falten dades");
+    delay(3000);
+    return;
+  }
+
+  esp_wifi_sta_wpa2_ent_set_identity((uint8_t*)enterpriseUsername.c_str(), enterpriseUsername.length());
+  esp_wifi_sta_wpa2_ent_set_username((uint8_t*)enterpriseUsername.c_str(), enterpriseUsername.length());
+  esp_wifi_sta_wpa2_ent_set_password((uint8_t*)password.c_str(), password.length());
+
+  esp_wifi_sta_wpa2_ent_enable();
+
+  WiFi.begin(ssid.c_str());
+
+  esperarConnexioWiFi();
+}
+
+void esperarConnexioWiFi() {
   unsigned long inici = millis();
-  const unsigned long timeout = 20000;
+  const unsigned long timeout = 30000;
 
   while (WiFi.status() != WL_CONNECTED && millis() - inici < timeout) {
     delay(500);
