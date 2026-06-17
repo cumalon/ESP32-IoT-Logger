@@ -31,6 +31,8 @@ String thingSpeakApiKey;
 unsigned long intervalDHT = 300000;        // 300 s
 unsigned long intervalThingSpeak = 300000; // 300 s
 
+const unsigned long tempsPortalConfigArrencada = 60000; // 60 segons
+
 float temperatura = NAN;
 float humitat = NAN;
 
@@ -75,13 +77,15 @@ void setup() {
   carregarConfiguracio();
 
   if (ssid == "") {
-    iniciarModeConfiguracio();
+    iniciarModeConfiguracioPermanent();
   }
+
+  obrirPortalConfiguracioTemporal();
 
   connectarWiFi();
 
   if (WiFi.status() != WL_CONNECTED) {
-    iniciarModeConfiguracio();
+    iniciarModeConfiguracioPermanent();
   }
 
   // Primera lectura, sense enviar a ThingSpeak encara
@@ -179,9 +183,44 @@ void guardarConfiguracio() {
 }
 
 // ---------- Mode configuració ----------
-void iniciarModeConfiguracio() {
-  Serial.println("Mode configuracio");
+void iniciarModeConfiguracioPermanent() {
+  Serial.println("Mode configuracio permanent");
 
+  iniciarAccessPointConfiguracio();
+
+  Serial.println("Portal configuracio permanent actiu");
+
+  while (true) {
+    server.handleClient();
+    gestionarApagatPantalla();
+    delay(10);
+  }
+}
+
+void obrirPortalConfiguracioTemporal() {
+  Serial.println("Portal configuracio temporal durant 60 segons");
+
+  iniciarAccessPointConfiguracio();
+
+  Serial.println("Pots entrar al portal durant 60 segons.");
+  Serial.println("Si no es desa cap canvi, el dispositiu continuara amb la WiFi configurada.");
+
+  unsigned long iniciPortal = millis();
+
+  while (millis() - iniciPortal < tempsPortalConfigArrencada) {
+    server.handleClient();
+    gestionarApagatPantalla();
+    delay(10);
+  }
+
+  server.stop();
+  WiFi.softAPdisconnect(true);
+  delay(500);
+
+  Serial.println("Fi del portal temporal. Continuant arrencada normal.");
+}
+
+void iniciarAccessPointConfiguracio() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP("ESP32_IoT_Config", "configesp32");
 
@@ -195,12 +234,6 @@ void iniciarModeConfiguracio() {
   server.on("/", paginaConfiguracio);
   server.on("/save", HTTP_POST, desarConfiguracio);
   server.begin();
-
-  while (true) {
-    server.handleClient();
-    gestionarApagatPantalla();
-    delay(10);
-  }
 }
 
 void paginaConfiguracio() {
@@ -251,6 +284,7 @@ void paginaConfiguracio() {
   html += "</form>";
 
   html += "<p>Connecta't a la WiFi <b>ESP32_IoT_Config</b> i obre <b>192.168.4.1</b></p>";
+  html += "<p>Si aquest portal s'ha obert temporalment a l'arrencada, es tancara automaticament al cap de 60 segons si no es desen canvis.</p>";
 
   html += "</body></html>";
 
